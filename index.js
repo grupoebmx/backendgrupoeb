@@ -586,104 +586,20 @@ app.post("/api/ordenes/insertar", async (req, res) => {
 
     // Validar datos obligatorios
     if (!id_pedido || !id_proveedor || !materiales || !materiales.length) {
-      return res.status(400).json({ 
-        message: "Faltan datos obligatorios",
-        detalles: {
-          id_pedido: !!id_pedido,
-          id_proveedor: !!id_proveedor,
-          materiales: !!materiales && materiales.length > 0
-        }
-      });
+      return res.status(400).json({ message: "Faltan datos obligatorios" });
     }
 
-    // 🔥 CONVERTIR FECHA DE DD/MM/YYYY A YYYY-MM-DD
-    let fechaFormateada = fecha;
-    if (fecha && fecha.includes('/')) {
-      const partes = fecha.split('/');
-      fechaFormateada = `${partes[2]}-${partes[1]}-${partes[0]}`;
-    }
-
-    console.log('📦 Datos recibidos:', {
-      id_pedido,
-      id_proveedor,
-      fecha_original: fecha,
-      fecha_formateada: fechaFormateada,
-      total_materiales: materiales.length
-    });
-
-    // 1️⃣ Verificar que el pedido existe
-    const pedidoExiste = await db.query(
-      'SELECT id FROM pedidos WHERE id = $1',
-      [id_pedido]
-    );
-
-    if (pedidoExiste.rows.length === 0) {
-      return res.status(404).json({ 
-        message: `El pedido ${id_pedido} no existe en la base de datos` 
-      });
-    }
-
-    // 2️⃣ Verificar que el proveedor existe
-    const proveedorExiste = await db.query(
-      'SELECT idproveedores FROM proveedores WHERE idproveedores = $1',
-      [id_proveedor]
-    );
-
-    if (proveedorExiste.rows.length === 0) {
-      return res.status(404).json({ 
-        message: `El proveedor ${id_proveedor} no existe en la base de datos` 
-      });
-    }
-
-    // 3️⃣ Verificar que no exista ya una orden para este pedido
-    const ordenExiste = await db.query(
-      'SELECT id FROM orden_compra WHERE no_pedido = $1',
-      [id_pedido]
-    );
-
-    if (ordenExiste.rows.length > 0) {
-      return res.status(409).json({ 
-        message: `Ya existe una orden de compra para el pedido ${id_pedido}`,
-        id_orden_existente: ordenExiste.rows[0].id
-      });
-    }
-
-    // 4️⃣ Insertar la orden de compra
+    // 1️⃣ Insertar la orden de compra con referencia al pedido
     const resultOrden = await db.query(
       `INSERT INTO orden_compra (no_pedido, id_proveedor, total_orden, status, fecha, subtotal, iva)
        VALUES ($1, $2, $3, 'Realizada', $4, $5, $6)
        RETURNING id`,
-      [
-        id_pedido, 
-        id_proveedor, 
-        parseFloat(total_orden) || 0, 
-        fechaFormateada, 
-        parseFloat(subtotal) || 0, 
-        parseFloat(iva) || 0
-      ]
+      [id_pedido, id_proveedor, parseFloat(total_orden) || 0, fecha, parseFloat(subtotal) || 0, parseFloat(iva) || 0]
     );
 
     const idOrden = resultOrden.rows[0].id;
-    console.log('✅ Orden creada con ID:', idOrden);
 
-    // 5️⃣ Verificar que todos los productos existen
-    for (const item of materiales) {
-      const productoExiste = await db.query(
-        'SELECT id FROM productos WHERE id = $1',
-        [item.id_producto]
-      );
-
-      if (productoExiste.rows.length === 0) {
-        // Revertir la inserción de la orden
-        await db.query('DELETE FROM orden_compra WHERE id = $1', [idOrden]);
-        
-        return res.status(404).json({ 
-          message: `El producto ${item.id_producto} no existe en la base de datos` 
-        });
-      }
-    }
-
-    // 6️⃣ Insertar los detalles de la orden
+    // 2️⃣ Insertar los detalles de la orden
     const insertPromises = materiales.map((item) =>
       db.query(
         `INSERT INTO orden_detalle
@@ -702,27 +618,16 @@ app.post("/api/ordenes/insertar", async (req, res) => {
     );
 
     await Promise.all(insertPromises);
-    console.log('✅ Detalles insertados correctamente');
 
     // Respuesta final
     res.json({
       message: "Orden de compra registrada correctamente y marcada como 'Realizada'",
       idOrden,
-      pedido: id_pedido,
-      proveedor: id_proveedor,
-      total: total_orden
     });
 
   } catch (error) {
-    console.error("❌ Error al insertar orden de compra:", error);
-    console.error("Stack:", error.stack);
-    
-    res.status(500).json({ 
-      message: "Error en el servidor", 
-      error: error.message,
-      codigo: error.code,
-      detalle: error.detail
-    });
+    console.error("Error al insertar orden de compra:", error);
+    res.status(500).json({ message: "Error en el servidor", error: error.message });
   }
 });
 
