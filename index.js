@@ -596,18 +596,18 @@ app.post("/api/ordenes/insertar", async (req, res) => {
       });
     }
 
-    // Validar formato de fecha - CAMBIO IMPORTANTE
+    // 🔥 CONVERTIR FECHA DE DD/MM/YYYY A YYYY-MM-DD
     let fechaFormateada = fecha;
     if (fecha && fecha.includes('/')) {
-      // Convertir de "25/11/2025" a "2025-11-25"
       const partes = fecha.split('/');
       fechaFormateada = `${partes[2]}-${partes[1]}-${partes[0]}`;
     }
 
-    console.log('📦 Insertando orden:', {
+    console.log('📦 Datos recibidos:', {
       id_pedido,
       id_proveedor,
-      fecha: fechaFormateada,
+      fecha_original: fecha,
+      fecha_formateada: fechaFormateada,
       total_materiales: materiales.length
     });
 
@@ -625,7 +625,7 @@ app.post("/api/ordenes/insertar", async (req, res) => {
 
     // 2️⃣ Verificar que el proveedor existe
     const proveedorExiste = await db.query(
-      'SELECT id FROM proveedores WHERE id = $1',
+      'SELECT idproveedores FROM proveedores WHERE idproveedores = $1',
       [id_proveedor]
     );
 
@@ -648,7 +648,7 @@ app.post("/api/ordenes/insertar", async (req, res) => {
       });
     }
 
-    // 4️⃣ Insertar la orden de compra con referencia al pedido
+    // 4️⃣ Insertar la orden de compra
     const resultOrden = await db.query(
       `INSERT INTO orden_compra (no_pedido, id_proveedor, total_orden, status, fecha, subtotal, iva)
        VALUES ($1, $2, $3, 'Realizada', $4, $5, $6)
@@ -717,12 +717,11 @@ app.post("/api/ordenes/insertar", async (req, res) => {
     console.error("❌ Error al insertar orden de compra:", error);
     console.error("Stack:", error.stack);
     
-    // Proporcionar más detalles del error
     res.status(500).json({ 
       message: "Error en el servidor", 
       error: error.message,
-      codigo: error.code, // Código de error de PostgreSQL
-      detalle: error.detail // Detalle adicional de PostgreSQL
+      codigo: error.code,
+      detalle: error.detail
     });
   }
 });
