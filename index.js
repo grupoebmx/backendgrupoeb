@@ -999,8 +999,6 @@ app.post("/api/impresion/insertar", async (req, res) => {
 });
 
 
-
-
 app.post("/api/procesosuaje/insertar", async (req, res) => {
   const {
     calidadMedidas, 
@@ -1485,6 +1483,71 @@ app.post("/api/ordenproduccion/insertar", async (req, res) => {
   }
 });
 
+
+app.post('/api/pedidos/limpiar-completados', async (req, res) => {
+  try {
+    const fechaLimite = new Date();
+    fechaLimite.setDate(fechaLimite.getDate() - 7);
+    
+    console.log('🗑️ Buscando pedidos completamente finalizados...');
+
+    // Encontrar pedidos donde TODAS sus órdenes están completadas y antiguas
+    const pedidosParaOcultar = await db.query(`
+      SELECT DISTINCT p.no_pedido
+      FROM pedidos p
+      WHERE p.status != 'Cancelado'
+        AND NOT EXISTS (
+          -- No debe tener órdenes pendientes o en proceso
+          SELECT 1 FROM orden_produccion op
+          WHERE op.no_pedido_id = p.no_pedido
+            AND op.eliminada = false
+            AND (op.estado_detallado != 'Completada' OR op.fecha_completada >= $1)
+        )
+        AND EXISTS (
+          -- Debe tener al menos una orden completada antigua
+          SELECT 1 FROM orden_produccion op
+          WHERE op.no_pedido_id = p.no_pedido
+            AND op.estado_detallado = 'Completada'
+            AND op.fecha_completada < $1
+        )
+    `, [fechaLimite]);
+
+    if (pedidosParaOcultar.rows.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No hay pedidos completados con más de 7 días',
+        ocultados: 0
+      });
+    }
+
+    const pedidosIds = pedidosParaOcultar.rows.map(p => p.no_pedido);
+
+    // Marcar todas las órdenes de estos pedidos como eliminadas
+    const result = await db.query(`
+      UPDATE orden_produccion
+      SET eliminada = true
+      WHERE no_pedido_id = ANY($1)
+        AND eliminada = false
+    `, [pedidosIds]);
+
+    console.log(`✅ Pedidos ocultados: ${pedidosIds.length}`);
+    
+    res.json({
+      success: true,
+      message: `Se ocultaron ${pedidosIds.length} pedido(s) completamente finalizados`,
+      ocultados: pedidosIds.length,
+      pedidos: pedidosIds
+    });
+
+  } catch (error) {
+    console.error('❌ Error al limpiar pedidos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al ocultar pedidos completados',
+      error: error.message
+    });
+  }
+});
 
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 // Busqueda por id
@@ -3113,6 +3176,7 @@ app.get('/api/tablero-produccion', async (req, res) => {
         COALESCE(pr_peg.total_entregadas, 0) as cantidad_pegado,
         COALESCE(pr_arm.total_entregadas, 0) as cantidad_armado,
         COALESCE(pr_alm.cantidad, 0) as cantidad_almacen,
+        COALESCE(pr_env.total_envio, 0) as cantidad_envio,
         
         -- IDs de procesos (para edición futura si es necesario)
         op.proceso_recepcion_id,
@@ -3121,6 +3185,7 @@ app.get('/api/tablero-produccion', async (req, res) => {
         op.proceso_pegado_id,
         op.proceso_armado_id,
         op.proceso_almacen_id,
+        op.proceso_envio_id,
         
         -- Cliente
         c.nombre_empresa
@@ -3144,6 +3209,7 @@ app.get('/api/tablero-produccion', async (req, res) => {
       LEFT JOIN proceso_pegado pr_peg ON pr_peg.id_pegado = op.proceso_pegado_id
       LEFT JOIN proceso_armado pr_arm ON pr_arm.idproceso_armado = op.proceso_armado_id
       LEFT JOIN proceso_almacen pr_alm ON pr_alm.id_proceso_almacen = op.proceso_almacen_id
+      LEFT JOIN proceso_envio pr_env ON pr_env.id_proceso_envio = op.proceso_envio_id
       
       WHERE p.status != 'Cancelado'
       ORDER BY p.fecha DESC, op.no_orden DESC
@@ -4178,11 +4244,6 @@ app.delete("/api/usuarios/:id", async (req, res) => {
 });
 
 
-/**
- * DELETE /api/limpiar-pedidos-completados
- * Elimina permanentemente pedidos con órdenes de producción completadas hace más de 7 días
- * incluyendo todas sus relaciones en cascada
- */
 app.delete('/api/limpiar-pedidos-completados', async (req, res) => {
   const connection = await db.getConnection();
   
